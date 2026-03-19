@@ -1,0 +1,294 @@
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font-mono); }
+.wrap { padding: 1rem 0; display: flex; flex-direction: column; gap: 16px; }
+.row { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 16px; }
+.panel { display: flex; flex-direction: column; gap: 8px; }
+.label { font-size: 12px; color: var(--color-text-secondary); font-family: var(--font-sans); letter-spacing: 0.05em; text-transform: uppercase; }
+textarea {
+  width: 100%; height: 320px; resize: vertical;
+  background: var(--color-background-secondary);
+  border: 0.5px solid var(--color-border-tertiary);
+  border-radius: var(--border-radius-md);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 12px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+textarea:focus { border-color: var(--color-border-secondary); }
+.btn-row { display: flex; gap: 8px; align-items: center; }
+button {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 7px 16px;
+  border-radius: var(--border-radius-md);
+  border: 0.5px solid var(--color-border-secondary);
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition: background 0.1s, transform 0.1s;
+}
+button:hover { background: var(--color-background-secondary); }
+button:active { transform: scale(0.97); }
+button.primary {
+  background: var(--color-text-primary);
+  color: var(--color-background-primary);
+  border-color: transparent;
+}
+button.primary:hover { opacity: 0.85; }
+.badge {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: var(--border-radius-md);
+  background: var(--color-background-secondary);
+  color: var(--color-text-secondary);
+  border: 0.5px solid var(--color-border-tertiary);
+}
+.mode-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.mode-btn {
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 20px;
+  border: 0.5px solid var(--color-border-tertiary);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+.mode-btn.active {
+  background: var(--color-text-primary);
+  color: var(--color-background-primary);
+  border-color: transparent;
+}
+.info { font-family: var(--font-sans); font-size: 12px; color: var(--color-text-tertiary); line-height: 1.5; }
+.copied { color: var(--color-text-success) !important; }
+</style>
+
+<div class="wrap">
+  <div class="mode-row">
+    <span style="font-family:var(--font-sans);font-size:12px;color:var(--color-text-secondary);">mode:</span>
+    <button class="mode-btn active" id="m-table" onclick="setMode('table')">table wrap</button>
+    <button class="mode-btn" id="m-fn" onclick="setMode('fn')">function chain</button>
+    <button class="mode-btn" id="m-raw" onclick="setMode('raw')">raw reverse</button>
+  </div>
+
+  <div class="row">
+    <div class="panel">
+      <div class="label">input — write it normal</div>
+      <textarea id="inp" placeholder="-- paste your lua script here&#10;local x = 10&#10;local y = x + 5&#10;print(y)&#10;&#10;for i = 1, 3 do&#10;    print(i)&#10;end"></textarea>
+    </div>
+    <div class="panel">
+      <div class="label">output — reads bottom to top</div>
+      <textarea id="out" readonly placeholder="-- converted output appears here"></textarea>
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button class="primary" onclick="convert()">convert</button>
+    <button onclick="copyOut()" id="copybtn">copy</button>
+    <button onclick="clear_()">clear</button>
+    <span class="badge" id="stats"></span>
+  </div>
+
+  <div class="info" id="modeinfo">
+    table wrap — each statement becomes a numbered entry in a table, executed forward. reads bottom to top visually.
+  </div>
+</div>
+
+<script>
+let mode = 'table'
+
+const modeInfo = {
+  'table': 'table wrap — each statement becomes a numbered entry in a table, executed forward. reads bottom to top visually.',
+  'fn': 'function chain — each statement is a named function, called in reverse at the bottom.',
+  'raw': 'raw reverse — lines are simply reversed. good for simple scripts with no dependencies.'
+}
+
+function setMode(m) {
+  mode = m
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'))
+  document.getElementById('m-'+m).classList.add('active')
+  document.getElementById('modeinfo').textContent = modeInfo[m]
+}
+
+function parseStatements(code) {
+  const lines = code.split('\n')
+  const stmts = []
+  let buf = []
+  let depth = 0
+
+  const openers = /\b(function|if|for|while|repeat|do)\b/g
+  const closers = /\bend\b|\buntil\b/g
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const trimmed = line.trim()
+
+    if (!trimmed || trimmed.startsWith('--')) {
+      if (buf.length === 0) {
+        stmts.push({ lines: [line], comment: true })
+      } else {
+        buf.push(line)
+      }
+      continue
+    }
+
+    // count depth changes
+    const opens = (line.match(openers) || []).length
+    const closes = (line.match(closers) || []).length
+    buf.push(line)
+
+    if (depth === 0 && opens === 0 && closes === 0) {
+      stmts.push({ lines: [...buf], comment: false })
+      buf = []
+    } else {
+      depth += opens - closes
+      if (depth <= 0) {
+        depth = 0
+        stmts.push({ lines: [...buf], comment: false })
+        buf = []
+      }
+    }
+  }
+  if (buf.length > 0) stmts.push({ lines: [...buf], comment: false })
+  return stmts
+}
+
+function convertTable(stmts) {
+  const varName = '_s'
+  const envName = '_e'
+  const out = []
+
+  out.push('-- reads bottom to top, executes top to bottom')
+  out.push('-- generated by lua reverse converter')
+  out.push('')
+  out.push('local ' + varName + ' = {}')
+  out.push('local ' + envName + ' = {}')
+  out.push('')
+
+  const nonComment = stmts.filter(s => !s.comment)
+  const total = nonComment.length
+  let idx = total
+
+  for (let i = stmts.length - 1; i >= 0; i--) {
+    const s = stmts[i]
+    if (s.comment) {
+      out.push(s.lines.join('\n'))
+      continue
+    }
+    const body = s.lines.map(l => '    ' + l).join('\n')
+    out.push(varName + '[' + idx + '] = function(' + envName + ')')
+    out.push(body)
+    out.push('end')
+    out.push('')
+    idx--
+  }
+
+  out.push('for _i = 1, #' + varName + ' do')
+  out.push('    ' + varName + '[_i](' + envName + ')')
+  out.push('end')
+
+  return out.join('\n')
+}
+
+function convertFn(stmts) {
+  const out = []
+  out.push('-- reads bottom to top, executes top to bottom')
+  out.push('-- generated by lua reverse converter')
+  out.push('')
+
+  const nonComment = stmts.filter(s => !s.comment)
+  const calls = []
+  let idx = nonComment.length
+
+  for (let i = stmts.length - 1; i >= 0; i--) {
+    const s = stmts[i]
+    if (s.comment) {
+      out.push(s.lines.join('\n'))
+      continue
+    }
+    const fname = '_step' + idx
+    calls.unshift(fname + '()')
+    const body = s.lines.map(l => '    ' + l).join('\n')
+    out.push('local function ' + fname + '()')
+    out.push(body)
+    out.push('end')
+    out.push('')
+    idx--
+  }
+
+  out.push('-- execution order (reads like a reversed call list):')
+  for (let i = calls.length - 1; i >= 0; i--) {
+    out.push(calls[i])
+  }
+
+  return out.join('\n')
+}
+
+function convertRaw(stmts) {
+  const out = []
+  out.push('-- raw reversed — lines flipped bottom to top')
+  out.push('-- generated by lua reverse converter')
+  out.push('')
+  const reversed = [...stmts].reverse()
+  for (const s of reversed) {
+    out.push(s.lines.join('\n'))
+  }
+  return out.join('\n')
+}
+
+function convert() {
+  const inp = document.getElementById('inp').value.trim()
+  if (!inp) return
+
+  const stmts = parseStatements(inp)
+  let result = ''
+
+  if (mode === 'table') result = convertTable(stmts)
+  else if (mode === 'fn') result = convertFn(stmts)
+  else result = convertRaw(stmts)
+
+  document.getElementById('out').value = result
+
+  const lines = result.split('\n').length
+  const chars = result.length
+  document.getElementById('stats').textContent = lines + ' lines, ' + chars + ' chars'
+}
+
+function copyOut() {
+  const val = document.getElementById('out').value
+  if (!val) return
+  navigator.clipboard.writeText(val).then(() => {
+    const btn = document.getElementById('copybtn')
+    btn.textContent = 'copied'
+    btn.classList.add('copied')
+    setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('copied') }, 1500)
+  })
+}
+
+function clear_() {
+  document.getElementById('inp').value = ''
+  document.getElementById('out').value = ''
+  document.getElementById('stats').textContent = ''
+}
+
+// auto-load example
+document.getElementById('inp').value = `-- example script
+local x = 10
+local y = x + 5
+
+if y > 10 then
+    print("big number: " .. y)
+end
+
+for i = 1, 3 do
+    print("step " .. i)
+end
+
+print("done")`
+</script>
